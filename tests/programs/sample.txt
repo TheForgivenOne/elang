@@ -1,0 +1,5 @@
+elang is a programming language
+designed to teach every concept
+from every major language in one place
+it is easy to start and grows with you
+the goal is to make you a professional

@@ -1,0 +1,11 @@
+{
+  "app": "elang",
+  "version": "1.0.0",
+  "debug": true,
+  "max_users": 100,
+  "features": ["oop", "async", "match", "pipes"],
+  "author": {
+    "name": "Dondre",
+    "city": "Miami"
+  }
+}
