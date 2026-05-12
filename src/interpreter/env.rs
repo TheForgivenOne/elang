@@ -80,7 +80,7 @@ impl Environment {
         }
     }
 
-    fn child(parent: &Environment) -> Self {
+    pub fn child(parent: &Environment) -> Self {
         Environment {
             values: HashMap::new(),
             parent: Some(Box::new(parent.clone())),
@@ -129,11 +129,12 @@ impl Environment {
     }
 }
 
-enum Control {
+pub enum Control {
     Normal,
-    Return(Value),
     Break,
     Continue,
+    Return(Value),
+    Error(ElangError),
 }
 
 pub fn run(program: Program) -> Result<(), ElangError> {
@@ -167,6 +168,7 @@ fn execute_program(stmts: &[Statement], env: &mut Environment) -> Result<(), Ela
                 });
             }
             Control::Normal => {}
+            Control::Error(e) => return Err(e),
         }
     }
     Ok(())
@@ -311,15 +313,14 @@ fn execute_statement(stmt: &Statement, env: &mut Environment) -> Result<Control,
                         }
                     };
                     for _ in 0..n {
-                        if let ctrl @ Control::Return(_)
-                        | ctrl @ Control::Break
-                        | ctrl @ Control::Continue = execute_block(body, env)?
-                        {
+                            let ctrl = execute_block(body, env)?;
                             match ctrl {
-                                Control::Break | Control::Continue => break,
-                                _ => return Ok(ctrl),
+                                Control::Break => break,
+                                Control::Continue => continue,
+                                Control::Return(v) => return Ok(Control::Return(v)),
+                                Control::Normal => {}
+                                Control::Error(e) => return Err(e),
                             }
-                        }
                     }
                     Ok(Control::Normal)
                 }
@@ -359,6 +360,7 @@ fn execute_statement(stmt: &Statement, env: &mut Environment) -> Result<Control,
                             }
                             Control::Return(_) => return Ok(ctrl),
                             Control::Normal => {}
+                            Control::Error(e) => return Err(e),
                         }
                         i += 1;
                     }
@@ -372,22 +374,27 @@ fn execute_statement(stmt: &Statement, env: &mut Environment) -> Result<Control,
                         }
                         let ctrl = execute_block(body, env)?;
                         match ctrl {
-                            Control::Break => break,
-                            Control::Continue => continue,
-                            Control::Return(_) => return Ok(ctrl),
+                            Control::Break => { break; }
+                            Control::Continue => { continue; }
+                            Control::Return(v) => return Ok(Control::Return(v)),
                             Control::Normal => {}
+                            Control::Error(e) => return Err(e),
                         }
                     }
                     Ok(Control::Normal)
                 }
-                LoopKind::Forever => loop {
-                    let ctrl = execute_block(body, env)?;
-                    match ctrl {
-                        Control::Break => break,
-                        Control::Continue => continue,
-                        Control::Return(_) => return Ok(ctrl),
-                        Control::Normal => {}
+                LoopKind::Forever => {
+                    loop {
+                        let ctrl = execute_block(body, env)?;
+                        match ctrl {
+                            Control::Break => { break; }
+                            Control::Continue => { continue; }
+                            Control::Return(v) => return Ok(Control::Return(v)),
+                            Control::Normal => {}
+                            Control::Error(e) => return Err(e),
+                        }
                     }
+                    Ok(Control::Normal)
                 },
             }
         }
@@ -413,10 +420,11 @@ fn execute_statement(stmt: &Statement, env: &mut Environment) -> Result<Control,
                 child.declare(var.clone(), item)?;
                 let ctrl = execute_block(body, &mut child)?;
                 match ctrl {
-                    Control::Break => break,
-                    Control::Continue => continue,
-                    Control::Return(_) => return Ok(ctrl),
+                    Control::Break => { break; }
+                    Control::Continue => { continue; }
+                    Control::Return(v) => return Ok(Control::Return(v)),
                     Control::Normal => {}
+                    Control::Error(e) => return Err(e),
                 }
             }
             Ok(Control::Normal)
@@ -693,11 +701,31 @@ fn get_field(obj: &Value, field: &str, line: usize) -> Result<Value, ElangError>
         Value::Instance {
             fields, methods, ..
         } => {
+            if let Some(method) = methods.get(field) {
+                if let Value::Fn {
+                    name,
+                    params,
+                    body,
+                    is_async,
+                    is_pure,
+                    closure,
+                } = method
+                {
+                    let mut bound_closure = Environment::child(closure);
+                    bound_closure.declare("self".to_string(), obj.clone())?;
+                    return Ok(Value::Fn {
+                        name: name.clone(),
+                        params: params.clone(),
+                        body: body.clone(),
+                        is_async: *is_async,
+                        is_pure: *is_pure,
+                        closure: bound_closure,
+                    });
+                }
+                return Ok(method.clone());
+            }
             let binding = fields.borrow();
             if let Some(val) = binding.get(field) {
-                return Ok(val.clone());
-            }
-            if let Some(val) = methods.get(field) {
                 return Ok(val.clone());
             }
             Err(ElangError::RuntimeError {
