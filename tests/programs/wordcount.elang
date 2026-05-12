@@ -1,0 +1,23 @@
+import io
+import string
+
+let content = io.read("tests/programs/sample.txt")
+let lines   = content.split("\n")
+let total   = 0
+let words   = []
+
+for line in lines:
+  let parts = line.split(" ")
+  for word in parts:
+    let cleaned = word.trim()
+    if cleaned != "":
+      total = total + 1
+      words.add(cleaned)
+    end
+  end
+end
+
+print "Total words: {total}"
+print "Total lines: {lines.count}"
+print "First word:  {words[0]}"
+print "Last word:   {words[words.count - 1]}"

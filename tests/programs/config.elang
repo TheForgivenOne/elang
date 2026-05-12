@@ -1,0 +1,24 @@
+import io
+import json
+
+let raw    = io.read("tests/programs/config.json")
+let config = json.parse(raw)
+
+print "App:      {config.app}"
+print "Version:  {config.version}"
+print "Debug:    {config.debug}"
+print "Max users:{config.max_users}"
+
+print "Features:"
+for feature in config.features:
+  print "  - {feature}"
+end
+
+print "Author:   {config.author.name} from {config.author.city}"
+
+let feature_count = config.features.count
+print "Total features: {feature_count}"
+
+if config.debug == true:
+  print "Debug mode is ON"
+end

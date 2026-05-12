@@ -1,0 +1,47 @@
+class Student:
+  pub name  = ""
+  pub score = 0
+
+  def setup(name, score):
+    self.name  = name
+    self.score = score
+  end
+
+  def grade():
+    match self.score:
+      is int:
+        if self.score >= 90: return "A" end
+        if self.score >= 80: return "B" end
+        if self.score >= 70: return "C" end
+        if self.score >= 60: return "D" end
+        return "F"
+      _: return "Invalid"
+    end
+  end
+
+  def passed():
+    return self.score >= 60
+  end
+
+  def report():
+    let g = self.grade()
+    let status = "PASS"
+    if not self.passed():
+      status = "FAIL"
+    end
+    print "{self.name} — Score: {self.score} — Grade: {g} — {status}"
+  end
+end
+
+let students = [
+  "Alice", "Bob", "Carol", "Dondre", "Eve"
+]
+let scores = [92, 55, 78, 88, 61]
+
+let i = 0
+repeat 5 times:
+  let s = Student()
+  s.setup(students[i], scores[i])
+  s.report()
+  i = i + 1
+end

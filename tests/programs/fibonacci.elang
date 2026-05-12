@@ -1,0 +1,12 @@
+def fibonacci(n):
+  if n <= 1:
+    return n
+  end
+  return fibonacci(n - 1) + fibonacci(n - 2)
+end
+
+let i = 0
+repeat 15 times:
+  print fibonacci(i)
+  i = i + 1
+end
