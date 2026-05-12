@@ -116,12 +116,32 @@ impl Interpreter {
                     _ => Err(self.make_error("cannot call non-function value")),
                 }
             }
+            Expr::StrInterp { value, .. } => {
+                Ok(Val::Str(self.eval_str_interp(value)))
+            }
+            Expr::Map { pairs, .. } => {
+                let mut map = HashMap::new();
+                for (key, val_expr) in pairs {
+                    let val = self.eval_expr(val_expr)?;
+                    map.insert(key.clone(), val);
+                }
+                Ok(Val::Map(map))
+            }
             Expr::List { items, .. } => {
                 let mut vals = Vec::new();
                 for item in items {
                     vals.push(self.eval_expr(item)?);
                 }
                 Ok(Val::List(vals))
+            }
+            Expr::Field { object, field, .. } => {
+                let obj = self.eval_expr(object)?;
+                self.get_field(&obj, field)
+            }
+            Expr::Index { object, index, .. } => {
+                let obj = self.eval_expr(object)?;
+                let idx = self.eval_expr(index)?;
+                self.get_index(&obj, &idx)
             }
             _ => Err(self.make_error("expression not supported")),
         }
@@ -183,6 +203,76 @@ impl Interpreter {
             message: msg.to_string(),
             line: self.last_line,
             stack: self.call_stack.clone(),
+        }
+    }
+
+    pub fn eval_str_interp(&mut self, template: &str) -> String {
+        let mut result = String::new();
+        let mut chars = template.chars().peekable();
+        let mut buf = String::new();
+        while let Some(c) = chars.next() {
+            if c == '{' {
+                result.push_str(&buf);
+                buf.clear();
+                let mut content = String::new();
+                let mut depth = 1;
+                for c in chars.by_ref() {
+                    if c == '{' {
+                        depth += 1;
+                        content.push(c);
+                    } else if c == '}' {
+                        depth -= 1;
+                        if depth == 0 {
+                            break;
+                        }
+                        content.push(c);
+                    } else {
+                        content.push(c);
+                    }
+                }
+                let val = self.eval_interp_segment(&content);
+                result.push_str(&val);
+            } else {
+                buf.push(c);
+            }
+        }
+        result.push_str(&buf);
+        result
+    }
+
+    fn eval_interp_segment(&mut self, content: &str) -> String {
+        let tokens = match crate::lexer::tokenize(content) {
+            Ok(t) => t,
+            Err(_) => return format!("{{{}}}", content),
+        };
+        let program = match crate::parser::parse(tokens) {
+            Ok(p) => p,
+            Err(_) => return format!("{{{}}}", content),
+        };
+        let expr = match program.into_iter().next() {
+            Some(Statement::ExprStmt { expr, .. }) => expr,
+            _ => return format!("{{{}}}", content),
+        };
+        match self.eval_expr(&expr) {
+            Ok(val) => format!("{}", val),
+            Err(_) => String::new(),
+        }
+    }
+
+    fn get_field(&self, obj: &Val, field: &str) -> Result<Val, ElangError> {
+        match obj {
+            Val::Map(map) => Ok(map.get(field).cloned().unwrap_or(Val::Nothing)),
+            _ => Ok(Val::Nothing),
+        }
+    }
+
+    fn get_index(&self, obj: &Val, idx: &Val) -> Result<Val, ElangError> {
+        match (obj, idx) {
+            (Val::List(items), Val::Int(i)) => {
+                let i = *i as usize;
+                Ok(items.get(i).cloned().unwrap_or(Val::Nothing))
+            }
+            _ => Ok(Val::Nothing),
         }
     }
 }
@@ -397,5 +487,55 @@ mod tests {
         let source = "let x = 10\nlet y = x + 5\nprint y";
         let result = run(source);
         assert!(result.is_ok());
+    }
+
+    fn eval_str_with_env(source: &str, interp_expr: &str) -> String {
+        let tokens = tokenize(source).expect("tokenize failed");
+        let prog = parse(tokens).expect("parse failed");
+        let mut interp = Interpreter::new();
+        interp.run(&prog).expect("run failed");
+        interp.eval_str_interp(interp_expr)
+    }
+
+    #[test]
+    fn test_interp_simple_variable() {
+        let result = eval_str_with_env("let name = \"elang\"", "{name}");
+        assert_eq!(result, "elang");
+    }
+
+    #[test]
+    fn test_interp_map_field() {
+        let result = eval_str_with_env(
+            "let config = {\n  app: \"myapp\"\n}",
+            "{config.app}",
+        );
+        assert_eq!(result, "myapp");
+    }
+
+    #[test]
+    fn test_interp_nested_map_field() {
+        let result = eval_str_with_env(
+            "let config = {\n  author: {\n    name: \"Dondre\"\n  }\n}",
+            "{config.author.name}",
+        );
+        assert_eq!(result, "Dondre");
+    }
+
+    #[test]
+    fn test_interp_arithmetic_expression() {
+        let result = eval_str_with_env("let x = 5", "{x * 2}");
+        assert_eq!(result, "10");
+    }
+
+    #[test]
+    fn test_interp_list_index() {
+        let result = eval_str_with_env("let nums = [1, 2, 3]", "{nums[0]}");
+        assert_eq!(result, "1");
+    }
+
+    #[test]
+    fn test_interp_bad_variable_no_crash() {
+        let result = eval_str_with_env("let x = 1", "{totally_fake}");
+        assert_eq!(result, "");
     }
 }
