@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
@@ -360,26 +362,32 @@ fn execute_statement(stmt: &Statement, env: &mut Environment) -> Result<Control,
                 }
                 Ok(Control::Normal)
             }
-            LoopKind::While(condition) => loop {
-                let cond_val = eval_expr(condition, env)?;
-                if !is_truthy(&cond_val) {
-                    break;
+            LoopKind::While(condition) => {
+                loop {
+                    let cond_val = eval_expr(condition, env)?;
+                    if !is_truthy(&cond_val) {
+                        break;
+                    }
+                    match execute_block(body, env)? {
+                        Control::Break => { break; }
+                        Control::Continue => { continue; }
+                        Control::Return(val) => return Ok(Control::Return(val)),
+                        Control::Normal => {}
+                    }
                 }
-                match execute_block(body, env)? {
-                    Control::Break => { break; }
-                    Control::Continue => { continue; }
-                    Control::Return(val) => return Ok(Control::Return(val)),
-                    Control::Normal => {}
+                Ok(Control::Normal)
+            }
+            LoopKind::Forever => {
+                loop {
+                    match execute_block(body, env)? {
+                        Control::Break => { break; }
+                        Control::Continue => { continue; }
+                        Control::Return(val) => return Ok(Control::Return(val)),
+                        Control::Normal => {}
+                    }
                 }
-            },
-            LoopKind::Forever => loop {
-                match execute_block(body, env)? {
-                    Control::Break => { break; }
-                    Control::Continue => { continue; }
-                    Control::Return(val) => return Ok(Control::Return(val)),
-                    Control::Normal => {}
-                }
-            },
+                Ok(Control::Normal)
+            }
         },
         Statement::ForIn {
             var,
