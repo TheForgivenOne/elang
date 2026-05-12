@@ -380,13 +380,21 @@ impl Parser {
         let condition = self.parse_expr()?;
         self.eat(TokenKind::Colon);
         let then_block = self.parse_block_stopping_at(&[TokenKind::End, TokenKind::Else])?;
+        let mut is_else_if = false;
         let else_block = if self.eat(TokenKind::Else) {
-            self.eat(TokenKind::Colon);
-            Some(self.parse_block_stopping_at(&[TokenKind::End])?)
+            if self.check(&TokenKind::If) {
+                is_else_if = true;
+                Some(vec![self.parse_if()?])
+            } else {
+                self.eat(TokenKind::Colon);
+                Some(self.parse_block_stopping_at(&[TokenKind::End])?)
+            }
         } else {
             None
         };
-        self.expect(TokenKind::End)?;
+        if !is_else_if {
+            self.expect(TokenKind::End)?;
+        }
         Ok(Statement::If { condition, then_block, else_block, line })
     }
 
@@ -874,6 +882,116 @@ mod tests {
         match &program[0] {
             Statement::If { then_block, .. } => {
                 assert_eq!(then_block.len(), 2);
+            }
+            _ => panic!("Expected If"),
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_else_if_chain_three_branches() -> Result<(), ElangError> {
+        let program = parse_source(
+            "if score >= 90:\n  print \"A\"\nelse if score >= 80:\n  print \"B\"\nelse if score >= 70:\n  print \"C\"\nend"
+        )?;
+        assert_eq!(program.len(), 1);
+        match &program[0] {
+            Statement::If { else_block, .. } => {
+                assert!(else_block.is_some());
+                let block = else_block.as_ref().unwrap();
+                assert_eq!(block.len(), 1);
+                match &block[0] {
+                    Statement::If { else_block: inner_else, .. } => {
+                        assert!(inner_else.is_some());
+                        let inner = inner_else.as_ref().unwrap();
+                        assert_eq!(inner.len(), 1);
+                        assert!(matches!(&inner[0], Statement::If { .. }));
+                    }
+                    _ => panic!("Expected nested If"),
+                }
+            }
+            _ => panic!("Expected If"),
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_else_if_with_final_else() -> Result<(), ElangError> {
+        let program = parse_source(
+            "if score >= 90:\n  print \"A\"\nelse if score >= 80:\n  print \"B\"\nelse:\n  print \"F\"\nend"
+        )?;
+        assert_eq!(program.len(), 1);
+        match &program[0] {
+            Statement::If { else_block, .. } => {
+                assert!(else_block.is_some());
+                let block = else_block.as_ref().unwrap();
+                assert_eq!(block.len(), 1);
+                match &block[0] {
+                    Statement::If { else_block: inner_else, .. } => {
+                        assert!(inner_else.is_some());
+                        let inner = inner_else.as_ref().unwrap();
+                        assert_eq!(inner.len(), 1);
+                        assert!(matches!(&inner[0], Statement::Print { .. }));
+                    }
+                    _ => panic!("Expected nested If"),
+                }
+            }
+            _ => panic!("Expected If"),
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_plain_if_no_else() -> Result<(), ElangError> {
+        let program = parse_source("if x > 0:\n  print \"positive\"\nend")?;
+        assert_eq!(program.len(), 1);
+        match &program[0] {
+            Statement::If { else_block, .. } => {
+                assert!(else_block.is_none());
+            }
+            _ => panic!("Expected If"),
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_not_false_parses() -> Result<(), ElangError> {
+        let program = parse_source("if not false:\n  print \"yes\"\nend")?;
+        assert_eq!(program.len(), 1);
+        match &program[0] {
+            Statement::If { condition, .. } => {
+                assert!(matches!(condition, Expr::UnaryOp { op: UnaryOpKind::Not, .. }));
+            }
+            _ => panic!("Expected If"),
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_not_true_parses() -> Result<(), ElangError> {
+        let program = parse_source("if not true:\n  print \"no\"\nend")?;
+        assert_eq!(program.len(), 1);
+        match &program[0] {
+            Statement::If { condition, .. } => {
+                assert!(matches!(condition, Expr::UnaryOp { op: UnaryOpKind::Not, .. }));
+            }
+            _ => panic!("Expected If"),
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_not_method_call_parses() -> Result<(), ElangError> {
+        let program = parse_source("if not is_done():\n  print \"still running\"\nend")?;
+        assert_eq!(program.len(), 1);
+        match &program[0] {
+            Statement::If { condition, .. } => {
+                match condition {
+                    Expr::UnaryOp { op, expr, .. } => {
+                        assert!(matches!(op, UnaryOpKind::Not));
+                        assert!(matches!(expr.as_ref(), Expr::Call { .. }));
+                    }
+                    _ => panic!("Expected UnaryOp"),
+                }
             }
             _ => panic!("Expected If"),
         }
