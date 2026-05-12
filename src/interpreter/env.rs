@@ -1,3 +1,5 @@
+#![allow(dead_code, unused_variables)]
+
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
@@ -844,10 +846,12 @@ fn compare_binop(
 fn call_value(callee: Value, args: &[Value], line: usize) -> Result<Value, ElangError> {
     match callee {
         Value::Fn {
+            name,
             params,
             body,
+            is_async,
+            is_pure,
             closure,
-            ..
         } => {
             if args.len() != params.len() {
                 return Err(ElangError::RuntimeError {
@@ -861,6 +865,17 @@ fn call_value(callee: Value, args: &[Value], line: usize) -> Result<Value, Elang
                 });
             }
             let mut fn_env = Environment::child(&closure);
+            if name != "<lambda>" {
+                let self_ref = Value::Fn {
+                    name: name.clone(),
+                    params: params.clone(),
+                    body: body.clone(),
+                    is_async,
+                    is_pure,
+                    closure: closure.clone(),
+                };
+                fn_env.declare(name, self_ref)?;
+            }
             for (param, arg) in params.iter().zip(args.iter()) {
                 fn_env.declare(param.clone(), arg.clone())?;
             }
@@ -1069,6 +1084,83 @@ a.increment()
 a.increment()
 b.increment()
 print a.count
+"#;
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            run_source(source).unwrap();
+        }));
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_factorial_recursion() {
+        let source = r#"
+def factorial(n):
+  if n <= 1:
+    return 1
+  end
+  return n * factorial(n - 1)
+end
+print factorial(5)
+"#;
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            run_source(source).unwrap();
+        }));
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_fibonacci_recursion() {
+        let source = r#"
+def fibonacci(n):
+  if n <= 1:
+    return n
+  end
+  return fibonacci(n - 1) + fibonacci(n - 2)
+end
+print fibonacci(10)
+"#;
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            run_source(source).unwrap();
+        }));
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_non_recursive_function_still_works() {
+        let source = r#"
+def greet(name):
+  print name
+end
+greet("hello")
+"#;
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            run_source(source).unwrap();
+        }));
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_lambda_still_works() {
+        let source = r#"
+let double = fn(x) => x * 2
+print double(5)
+"#;
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            run_source(source).unwrap();
+        }));
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_deep_fibonacci_recursion() {
+        let source = r#"
+def fibonacci(n):
+  if n <= 1:
+    return n
+  end
+  return fibonacci(n - 1) + fibonacci(n - 2)
+end
+print fibonacci(15)
 "#;
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             run_source(source).unwrap();
