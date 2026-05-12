@@ -52,16 +52,16 @@ impl std::fmt::Display for Value {
                 write!(f, "[{}]", strs.join(", "))
             }
             Value::Map(map) => {
-                let strs: Vec<String> = map
-                    .iter()
-                    .map(|(k, v)| format!("{}: {}", k, v))
-                    .collect();
+                let strs: Vec<String> =
+                    map.iter().map(|(k, v)| format!("{}: {}", k, v)).collect();
                 write!(f, "{{{}}}", strs.join(", "))
             }
             Value::Native { name, .. } => write!(f, "<native {}>", name),
             Value::Fn { name, .. } => write!(f, "<fn {}>", name),
             Value::Class { name, .. } => write!(f, "<class {}>", name),
-            Value::Instance { class_name, .. } => write!(f, "<instance of {}>", class_name),
+            Value::Instance { class_name, .. } => {
+                write!(f, "<instance of {}>", class_name)
+            }
         }
     }
 }
@@ -80,7 +80,7 @@ impl Environment {
         }
     }
 
-    fn child(parent: &Environment) -> Self {
+    pub fn child(parent: &Environment) -> Self {
         Environment {
             values: HashMap::new(),
             parent: Some(Box::new(parent.clone())),
@@ -129,7 +129,8 @@ impl Environment {
     }
 }
 
-enum Control {
+#[derive(Debug, Clone)]
+pub(crate) enum Control {
     Normal,
     Return(Value),
     Break,
@@ -138,7 +139,6 @@ enum Control {
 
 pub fn run(program: Program) -> Result<(), ElangError> {
     let mut env = Environment::new();
-    crate::stdlib::register_all(&mut env);
     execute_program(&program, &mut env)
 }
 
@@ -270,7 +270,7 @@ fn execute_statement(stmt: &Statement, env: &mut Environment) -> Result<Control,
             env.declare(name.clone(), class_val)?;
             Ok(Control::Normal)
         }
-        Statement::Return { value, line } => {
+        Statement::Return { value, line: _ } => {
             let val = eval_expr(value, env)?;
             Ok(Control::Return(val))
         }
@@ -289,108 +289,98 @@ fn execute_statement(stmt: &Statement, env: &mut Environment) -> Result<Control,
                 Ok(Control::Normal)
             }
         }
-        Statement::Loop { kind, body, line: _ } => {
-            match kind {
-                LoopKind::RepeatN(count_expr) => {
-                    let count_val = eval_expr(count_expr, env)?;
-                    let n = match count_val {
-                        Value::Int(n) if n >= 0 => n as usize,
-                        Value::Int(n) => {
-                            return Err(ElangError::RuntimeError {
-                                message: "Repeat count must be non-negative".into(),
-                                line: 0,
-                                stack: vec![],
-                            });
-                        }
-                        _ => {
-                            return Err(ElangError::RuntimeError {
-                                message: "Repeat count must be an integer".into(),
-                                line: 0,
-                                stack: vec![],
-                            });
-                        }
-                    };
-                    for _ in 0..n {
-                        if let ctrl @ Control::Return(_)
-                        | ctrl @ Control::Break
-                        | ctrl @ Control::Continue = execute_block(body, env)?
-                        {
-                            match ctrl {
-                                Control::Break | Control::Continue => break,
-                                _ => return Ok(ctrl),
-                            }
-                        }
+        Statement::Loop { kind, body, line: _ } => match kind {
+            LoopKind::RepeatN(count_expr) => {
+                let count_val = eval_expr(count_expr, env)?;
+                let n = match count_val {
+                    Value::Int(n) if n >= 0 => n as usize,
+                    Value::Int(_) => {
+                        return Err(ElangError::RuntimeError {
+                            message: "Repeat count must be non-negative".into(),
+                            line: 0,
+                            stack: vec![],
+                        });
                     }
-                    Ok(Control::Normal)
-                }
-                LoopKind::RepeatRange { var, from, to } => {
-                    let from_val = eval_expr(from, env)?;
-                    let to_val = eval_expr(to, env)?;
-                    let from_n = match from_val {
-                        Value::Int(n) => n,
-                        _ => {
-                            return Err(ElangError::RuntimeError {
-                                message: "Range start must be an integer".into(),
-                                line: 0,
-                                stack: vec![],
-                            });
-                        }
-                    };
-                    let to_n = match to_val {
-                        Value::Int(n) => n,
-                        _ => {
-                            return Err(ElangError::RuntimeError {
-                                message: "Range end must be an integer".into(),
-                                line: 0,
-                                stack: vec![],
-                            });
-                        }
-                    };
-                    let mut i = from_n;
-                    while i <= to_n {
-                        let mut child = Environment::child(env);
-                        child.declare(var.clone(), Value::Int(i))?;
-                        let ctrl = execute_block(body, &mut child)?;
-                        match ctrl {
-                            Control::Break => break,
-                            Control::Continue => {
-                                i += 1;
-                                continue;
-                            }
-                            Control::Return(_) => return Ok(ctrl),
-                            Control::Normal => {}
-                        }
-                        i += 1;
+                    _ => {
+                        return Err(ElangError::RuntimeError {
+                            message: "Repeat count must be an integer".into(),
+                            line: 0,
+                            stack: vec![],
+                        });
                     }
-                    Ok(Control::Normal)
-                }
-                LoopKind::While(condition) => {
-                    loop {
-                        let cond_val = eval_expr(condition, env)?;
-                        if !is_truthy(&cond_val) {
-                            break;
-                        }
-                        let ctrl = execute_block(body, env)?;
-                        match ctrl {
-                            Control::Break => break,
-                            Control::Continue => continue,
-                            Control::Return(_) => return Ok(ctrl),
-                            Control::Normal => {}
-                        }
+                };
+                for _ in 0..n {
+                    match execute_block(body, env)? {
+                        Control::Return(_) | Control::Break | Control::Continue => break,
+                        _ => {}
                     }
-                    Ok(Control::Normal)
                 }
-                LoopKind::Forever => loop {
-                    let ctrl = execute_block(body, env)?;
-                    match ctrl {
-                        Control::Break => break,
-                        Control::Continue => continue,
-                        Control::Return(_) => return Ok(ctrl),
+                Ok(Control::Normal)
+            }
+            LoopKind::RepeatRange { var, from, to } => {
+                let from_val = eval_expr(from, env)?;
+                let to_val = eval_expr(to, env)?;
+                let from_n = match from_val {
+                    Value::Int(n) => n,
+                    _ => {
+                        return Err(ElangError::RuntimeError {
+                            message: "Range start must be an integer".into(),
+                            line: 0,
+                            stack: vec![],
+                        });
+                    }
+                };
+                let to_n = match to_val {
+                    Value::Int(n) => n,
+                    _ => {
+                        return Err(ElangError::RuntimeError {
+                            message: "Range end must be an integer".into(),
+                            line: 0,
+                            stack: vec![],
+                        });
+                    }
+                };
+                let mut i = from_n;
+                loop {
+                    if i > to_n {
+                        break;
+                    }
+                    let mut child = Environment::child(env);
+                    child.declare(var.clone(), Value::Int(i))?;
+                    match execute_block(body, &mut child)? {
+                        Control::Break => { break; }
+                        Control::Continue => {
+                            i += 1;
+                            continue;
+                        }
+                        Control::Return(v) => return Ok(Control::Return(v)),
                         Control::Normal => {}
                     }
-                },
+                    i += 1;
+                }
+                Ok(Control::Normal)
             }
-        }
+            LoopKind::While(condition) => loop {
+                let cond_val = eval_expr(condition, env)?;
+                if !is_truthy(&cond_val) {
+                    break;
+                }
+                match execute_block(body, env)? {
+                    Control::Break => { break; }
+                    Control::Continue => { continue; }
+                    Control::Return(val) => return Ok(Control::Return(val)),
+                    Control::Normal => {}
+                }
+            },
+            LoopKind::Forever => loop {
+                match execute_block(body, env)? {
+                    Control::Break => { break; }
+                    Control::Continue => { continue; }
+                    Control::Return(val) => return Ok(Control::Return(val)),
+                    Control::Normal => {}
+                }
+            },
+        },
         Statement::ForIn {
             var,
             iterable,
@@ -411,11 +401,10 @@ fn execute_statement(stmt: &Statement, env: &mut Environment) -> Result<Control,
             for item in items {
                 let mut child = Environment::child(env);
                 child.declare(var.clone(), item)?;
-                let ctrl = execute_block(body, &mut child)?;
-                match ctrl {
-                    Control::Break => break,
-                    Control::Continue => continue,
-                    Control::Return(_) => return Ok(ctrl),
+                match execute_block(body, &mut child)? {
+                    Control::Break => { break; }
+                    Control::Continue => { continue; }
+                    Control::Return(v) => return Ok(Control::Return(v)),
                     Control::Normal => {}
                 }
             }
@@ -458,15 +447,9 @@ fn execute_statement(stmt: &Statement, env: &mut Environment) -> Result<Control,
                 Err(err) => {
                     let msg = format!("{}", err);
                     for catch in catches {
-                        let type_match = match &catch.error_type {
-                            None => true,
-                            Some(_) => true,
-                        };
-                        if type_match {
-                            let mut catch_env = Environment::child(env);
-                            catch_env.declare(catch.var.clone(), Value::Str(msg.clone()))?;
-                            return execute_block(&catch.body, &mut catch_env);
-                        }
+                        let mut catch_env = Environment::child(env);
+                        catch_env.declare(catch.var.clone(), Value::Str(msg.clone()))?;
+                        return execute_block(&catch.body, &mut catch_env);
                     }
                     Err(err)
                 }
@@ -509,7 +492,7 @@ fn execute_statement(stmt: &Statement, env: &mut Environment) -> Result<Control,
                     Ok(Control::Normal)
                 }
                 _ => Err(ElangError::RuntimeError {
-                    message: format!("Cannot assign field on this value"),
+                    message: "Cannot assign field on this value".into(),
                     line: *line,
                     stack: vec![],
                 }),
@@ -536,12 +519,7 @@ fn eval_expr(expr: &Expr, env: &Environment) -> Result<Value, ElangError> {
         Expr::Str { value, line: _ } => Ok(Value::Str(value.clone())),
         Expr::Bool { value, line: _ } => Ok(Value::Bool(*value)),
         Expr::Nothing { line: _ } => Ok(Value::Nothing),
-        Expr::Ident { name, line } => {
-            if name == "self" {
-                return env.get("self");
-            }
-            env.get(name)
-        }
+        Expr::Ident { name, line: _ } => env.get(name),
         Expr::StrInterp { value, line: _ } => {
             let mut result = String::new();
             let mut buf = String::new();
@@ -676,7 +654,9 @@ fn eval_expr(expr: &Expr, env: &Environment) -> Result<Value, ElangError> {
             let pipe_args = vec![left_val];
             let right_val = eval_expr(right, env)?;
             match right_val {
-                Value::Fn { .. } | Value::Native { .. } => call_value(right_val, &pipe_args, *line),
+                Value::Fn { .. } | Value::Native { .. } => {
+                    call_value(right_val, &pipe_args, *line)
+                }
                 _ => Err(ElangError::RuntimeError {
                     message: "Right side of pipe must be a function".into(),
                     line: *line,
@@ -693,11 +673,31 @@ fn get_field(obj: &Value, field: &str, line: usize) -> Result<Value, ElangError>
         Value::Instance {
             fields, methods, ..
         } => {
+            if let Some(method) = methods.get(field) {
+                if let Value::Fn {
+                    name,
+                    params,
+                    body,
+                    is_async,
+                    is_pure,
+                    closure,
+                } = method
+                {
+                    let mut bound_closure = Environment::child(closure);
+                    bound_closure.declare("self".to_string(), obj.clone())?;
+                    return Ok(Value::Fn {
+                        name: name.clone(),
+                        params: params.clone(),
+                        body: body.clone(),
+                        is_async: *is_async,
+                        is_pure: *is_pure,
+                        closure: bound_closure,
+                    });
+                }
+                return Ok(method.clone());
+            }
             let binding = fields.borrow();
             if let Some(val) = binding.get(field) {
-                return Ok(val.clone());
-            }
-            if let Some(val) = methods.get(field) {
                 return Ok(val.clone());
             }
             Err(ElangError::RuntimeError {
@@ -725,12 +725,7 @@ fn get_field(obj: &Value, field: &str, line: usize) -> Result<Value, ElangError>
     }
 }
 
-fn eval_binop(
-    left: Value,
-    op: &BinOpKind,
-    right: Value,
-    line: usize,
-) -> Result<Value, ElangError> {
+fn eval_binop(left: Value, op: &BinOpKind, right: Value, line: usize) -> Result<Value, ElangError> {
     match op {
         BinOpKind::Add => match (&left, &right) {
             (Value::Int(a), Value::Int(b)) => Ok(Value::Int(a + b)),
@@ -739,32 +734,46 @@ fn eval_binop(
             (Value::Float(a), Value::Int(b)) => Ok(Value::Float(a + *b as f64)),
             (Value::Str(a), Value::Str(b)) => Ok(Value::Str(format!("{}{}", a, b))),
             _ => Err(ElangError::RuntimeError {
-                message: format!("Cannot add {:?} and {:?}", left, right),
+                message: "Cannot add these types".into(),
                 line,
                 stack: vec![],
             }),
         },
-        BinOpKind::Sub => number_binop(&left, &right, |a, b| Value::Int(a - b), |a, b| Value::Float(a - b), line),
-        BinOpKind::Mul => number_binop(&left, &right, |a, b| Value::Int(a * b), |a, b| Value::Float(a * b), line),
-        BinOpKind::Div => number_binop(&left, &right, |a, b| Value::Int(a / b), |a, b| Value::Float(a / b), line),
-        BinOpKind::Mod => number_binop(&left, &right, |a, b| Value::Int(a % b), |_, _| unreachable!(), line),
+        BinOpKind::Sub => {
+            number_binop(&left, &right, |a, b| Value::Int(a - b), |a, b| Value::Float(a - b), line)
+        }
+        BinOpKind::Mul => {
+            number_binop(&left, &right, |a, b| Value::Int(a * b), |a, b| Value::Float(a * b), line)
+        }
+        BinOpKind::Div => {
+            number_binop(&left, &right, |a, b| Value::Int(a / b), |a, b| Value::Float(a / b), line)
+        }
+        BinOpKind::Mod => {
+            number_binop(&left, &right, |a, b| Value::Int(a % b), |_, _| unreachable!(), line)
+        }
         BinOpKind::Eq => Ok(Value::Bool(values_equal(&left, &right))),
         BinOpKind::NotEq => Ok(Value::Bool(!values_equal(&left, &right))),
-        BinOpKind::Lt => compare_binop(&left, &right, |a, b| a < b, |a, b| a < b, line),
-        BinOpKind::Gt => compare_binop(&left, &right, |a, b| a > b, |a, b| a > b, line),
-        BinOpKind::LtEq => compare_binop(&left, &right, |a, b| a <= b, |a, b| a <= b, line),
-        BinOpKind::GtEq => compare_binop(&left, &right, |a, b| a >= b, |a, b| a >= b, line),
+        BinOpKind::Lt => {
+            compare_binop(&left, &right, |a, b| a < b, |a, b| a < b, line)
+        }
+        BinOpKind::Gt => {
+            compare_binop(&left, &right, |a, b| a > b, |a, b| a > b, line)
+        }
+        BinOpKind::LtEq => {
+            compare_binop(&left, &right, |a, b| a <= b, |a, b| a <= b, line)
+        }
+        BinOpKind::GtEq => {
+            compare_binop(&left, &right, |a, b| a >= b, |a, b| a >= b, line)
+        }
         BinOpKind::And => {
-            let a = is_truthy(&left);
-            if !a {
+            if !is_truthy(&left) {
                 Ok(Value::Bool(false))
             } else {
                 Ok(Value::Bool(is_truthy(&right)))
             }
         }
         BinOpKind::Or => {
-            let a = is_truthy(&left);
-            if a {
+            if is_truthy(&left) {
                 Ok(Value::Bool(true))
             } else {
                 Ok(Value::Bool(is_truthy(&right)))
@@ -786,7 +795,7 @@ fn number_binop(
         (Value::Int(a), Value::Float(b)) => Ok(float_op(*a as f64, *b)),
         (Value::Float(a), Value::Int(b)) => Ok(float_op(*a, *b as f64)),
         _ => Err(ElangError::RuntimeError {
-            message: format!("Cannot perform arithmetic on non-numbers"),
+            message: "Cannot perform arithmetic on non-numbers".into(),
             line,
             stack: vec![],
         }),
@@ -806,7 +815,7 @@ fn compare_binop(
         (Value::Int(a), Value::Float(b)) => Ok(Value::Bool(float_op(*a as f64, *b))),
         (Value::Float(a), Value::Int(b)) => Ok(Value::Bool(float_op(*a, *b as f64))),
         _ => Err(ElangError::RuntimeError {
-            message: format!("Cannot compare these types"),
+            message: "Cannot compare these types".into(),
             line,
             stack: vec![],
         }),
@@ -823,11 +832,7 @@ fn call_value(callee: Value, args: &[Value], line: usize) -> Result<Value, Elang
         } => {
             if args.len() != params.len() {
                 return Err(ElangError::RuntimeError {
-                    message: format!(
-                        "Expected {} arguments, got {}",
-                        params.len(),
-                        args.len()
-                    ),
+                    message: format!("Expected {} arguments, got {}", params.len(), args.len()),
                     line,
                     stack: vec![],
                 });
@@ -842,94 +847,29 @@ fn call_value(callee: Value, args: &[Value], line: usize) -> Result<Value, Elang
                 _ => Ok(Value::Nothing),
             }
         }
-        Value::Native { func, .. } => {
-            match func(args) {
-                Ok(val) => Ok(val),
-                Err(msg) => Err(ElangError::RuntimeError {
-                    message: msg,
-                    line,
-                    stack: vec![],
-                }),
-            }
-        }
+        Value::Native { func, .. } => match func(args) {
+            Ok(val) => Ok(val),
+            Err(msg) => Err(ElangError::RuntimeError {
+                message: msg,
+                line,
+                stack: vec![],
+            }),
+        },
         Value::Class {
             name,
             parent: _,
             default_fields,
             methods,
         } => {
-            let fields = Rc::new(RefCell::new(default_fields.clone()));
             let instance = Value::Instance {
                 class_name: name,
-                fields: Rc::clone(&fields),
+                fields: Rc::new(RefCell::new(default_fields.clone())),
                 methods: methods.clone(),
             };
             Ok(instance)
         }
-        Value::Instance {
-            class_name,
-            fields,
-            methods,
-        } => {
-            Err(ElangError::RuntimeError {
-                message: format!("Cannot call an instance of '{}' as a function", class_name),
-                line,
-                stack: vec![],
-            })
-        }
         _ => Err(ElangError::RuntimeError {
-            message: format!("Cannot call this value as a function"),
-            line,
-            stack: vec![],
-        }),
-    }
-}
-
-fn call_method(method: Value, instance: Value, args: &[Value], line: usize) -> Result<Value, ElangError> {
-    match method {
-        Value::Fn {
-            params,
-            body,
-            is_async,
-            is_pure,
-            closure,
-            ..
-        } => {
-            let expected = params.len();
-            let total = args.len() + 1;
-            if total != expected {
-                return Err(ElangError::RuntimeError {
-                    message: format!(
-                        "Method expects {} arguments (including self), got {}",
-                        expected, total
-                    ),
-                    line,
-                    stack: vec![],
-                });
-            }
-            let mut fn_env = Environment::child(&closure);
-            fn_env.declare("self".to_string(), instance)?;
-            for (i, param) in params.iter().enumerate() {
-                if *param == "self" {
-                    continue;
-                }
-                let arg_idx = if *param == "self" { 0 } else { i - 1 };
-                if i == 0 {
-                    continue;
-                }
-                let arg_idx = i - 1;
-                if arg_idx < args.len() {
-                    fn_env.declare(param.clone(), args[arg_idx].clone())?;
-                }
-            }
-            let result = execute_block(&body, &mut fn_env)?;
-            match result {
-                Control::Return(val) => Ok(val),
-                _ => Ok(Value::Nothing),
-            }
-        }
-        _ => Err(ElangError::RuntimeError {
-            message: "Cannot call non-function as method".into(),
+            message: "Cannot call this value as a function".into(),
             line,
             stack: vec![],
         }),
@@ -972,14 +912,6 @@ mod tests {
         let tokens = tokenize(source)?;
         let program = parser::parse(tokens)?;
         run(program)
-    }
-
-    fn eval_source(source: &str) -> Result<String, ElangError> {
-        let output = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let _ = run_source(source);
-        }));
-        let _ = output;
-        run_source(source).map(|_| "ok".to_string())
     }
 
     #[test]

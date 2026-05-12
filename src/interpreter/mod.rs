@@ -1,4 +1,4 @@
 pub mod env;
 pub mod oop;
 
-pub use env::{Environment, Value, run};
+pub use env::run;
