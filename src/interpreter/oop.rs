@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 use crate::errors::ElangError;
 use std::cell::RefCell;
 use std::collections::HashMap;

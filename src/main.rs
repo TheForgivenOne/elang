@@ -3,6 +3,7 @@ mod parser;
 mod ast;
 mod interpreter;
 mod errors;
+mod stdlib;
 
 use std::env;
 use std::fs;
