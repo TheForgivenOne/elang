@@ -1,0 +1,1 @@
+/home/dondre/projects/elang/target/x86_64-unknown-linux-musl/debug/elang: /home/dondre/projects/elang/src/ast.rs /home/dondre/projects/elang/src/errors.rs /home/dondre/projects/elang/src/interpreter.rs /home/dondre/projects/elang/src/lexer.rs /home/dondre/projects/elang/src/main.rs /home/dondre/projects/elang/src/parser.rs /home/dondre/projects/elang/src/stdlib.rs
