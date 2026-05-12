@@ -831,4 +831,52 @@ mod tests {
         assert_eq!(program.len(), 3);
         Ok(())
     }
+
+    #[test]
+    fn test_match_newline_separated_arms() -> Result<(), ElangError> {
+        let source = "match status:\n  200: print \"OK\"\n  404: print \"Not found\"\n  _: print \"Unknown\"\nend";
+        let program = parse_source(source)?;
+        assert_eq!(program.len(), 1);
+        match &program[0] {
+            Statement::Match { arms, .. } => {
+                assert_eq!(arms.len(), 3);
+            }
+            _ => panic!("Expected Match"),
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_multiline_expression_in_parens() -> Result<(), ElangError> {
+        let program = parse_source("let x = (1 +\n 2)")?;
+        assert_eq!(program.len(), 1);
+        match &program[0] {
+            Statement::LetDecl { name, value, .. } => {
+                assert_eq!(name, "x");
+                match value {
+                    Expr::BinOp { left, op, right, .. } => {
+                        assert!(matches!(op, BinOpKind::Add));
+                        assert!(matches!(**left, Expr::Int { value: 1, .. }));
+                        assert!(matches!(**right, Expr::Int { value: 2, .. }));
+                    }
+                    _ => panic!("Expected BinOp"),
+                }
+            }
+            _ => panic!("Expected LetDecl"),
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_if_block_with_multiple_statements() -> Result<(), ElangError> {
+        let program = parse_source("if x > 0:\n  print 1\n  print 2\nend")?;
+        assert_eq!(program.len(), 1);
+        match &program[0] {
+            Statement::If { then_block, .. } => {
+                assert_eq!(then_block.len(), 2);
+            }
+            _ => panic!("Expected If"),
+        }
+        Ok(())
+    }
 }
