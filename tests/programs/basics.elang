@@ -1,0 +1,12 @@
+let x = 42
+const PI = 3.14
+var y = 100
+let name = "elang"
+let is_cool = true
+let nothing_val = nothing
+print x
+print PI
+print y
+print name
+print is_cool
+print nothing_val

@@ -1,0 +1,7 @@
+import string
+print string.find("hello world", "world")
+print string.replace("foo foo bar", "foo", "baz")
+print string.starts_with("elang", "el")
+print string.ends_with("elang", "ng")
+print string.repeat_str("ha", 3)
+print string.pad_left("42", 5, "0")

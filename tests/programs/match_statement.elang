@@ -1,0 +1,22 @@
+match 2:
+  1: print "one"
+  2: print "two"
+  3: print "three"
+  _: print "other"
+end
+
+match "hello":
+  "hi": print "greeting"
+  "hello": print "found_hello"
+  _: print "unknown"
+end
+
+match 42:
+  is int: print "is_int"
+  _: print "not_int"
+end
+
+match true:
+  true: print "is_true"
+  false: print "is_false"
+end

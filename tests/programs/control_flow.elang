@@ -1,0 +1,41 @@
+if true:
+  print "if_works"
+end
+
+if false:
+  print "should_not_print"
+else:
+  print "else_works"
+end
+
+if false:
+  print "no1"
+else if true:
+  print "elif_works"
+else:
+  print "no2"
+end
+
+let i = 1
+while i <= 3:
+  print i
+  i = i + 1
+end
+
+repeat 3 times:
+  print "repeat_works"
+end
+
+let items = [10, 20, 30]
+for item in items:
+  print item
+end
+
+let x = 0
+loop:
+  x = x + 1
+  print x
+  if x >= 2:
+    break
+  end
+end

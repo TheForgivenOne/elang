@@ -1,0 +1,7 @@
+import math
+print math.sqrt(144)
+print math.floor(3.7)
+print math.ceil(3.2)
+print math.abs(-42)
+print math.pow(2, 10)
+print math.PI

@@ -61,7 +61,7 @@ pub enum Expr {
 }
 
 /// Binary arithmetic and comparison operators.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum BinOpKind {
     Add,
     Sub,

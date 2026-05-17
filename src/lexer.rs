@@ -411,6 +411,195 @@ mod tests {
         Token { kind, line }
     }
 
+    fn assert_tokens(source: &str, expected: Vec<TokenKind>) {
+        let tokens = tokenize(source).unwrap();
+        let kinds: Vec<&TokenKind> = tokens.iter().map(|t| &t.kind).collect();
+        assert_eq!(kinds.len(), expected.len(), "token count mismatch for '{:?}'.\ngot:      {:?}\nexpected: {:?}", source, kinds, expected);
+        for (i, (got, exp)) in kinds.iter().zip(expected.iter()).enumerate() {
+            if *got != exp {
+                panic!("token {} mismatch for '{:?}':\n  got:      {:?}\n  expected: {:?}", i, source, got, exp);
+            }
+        }
+    }
+
+    fn assert_lex_error(source: &str) {
+        assert!(tokenize(source).is_err(), "expected lex error for '{}'", source);
+    }
+
+    // === Keywords ===
+
+    #[test]
+    fn test_all_keywords() {
+        let keywords = [
+            ("let", TokenKind::Let), ("const", TokenKind::Const), ("var", TokenKind::Var),
+            ("def", TokenKind::Def), ("class", TokenKind::Class), ("extends", TokenKind::Extends),
+            ("implements", TokenKind::Implements), ("interface", TokenKind::Interface),
+            ("return", TokenKind::Return), ("if", TokenKind::If), ("else", TokenKind::Else),
+            ("for", TokenKind::For), ("while", TokenKind::While), ("loop", TokenKind::Loop),
+            ("repeat", TokenKind::Repeat), ("times", TokenKind::Times), ("in", TokenKind::In),
+            ("from", TokenKind::From), ("to", TokenKind::To), ("match", TokenKind::Match),
+            ("try", TokenKind::Try), ("catch", TokenKind::Catch), ("import", TokenKind::Import),
+            ("export", TokenKind::Export), ("async", TokenKind::Async), ("await", TokenKind::Await),
+            ("self", TokenKind::Self_), ("pub", TokenKind::Pub), ("pri", TokenKind::Pri),
+            ("pure", TokenKind::Pure), ("alloc", TokenKind::Alloc), ("free", TokenKind::Free),
+            ("ref", TokenKind::Ref), ("new", TokenKind::New), ("end", TokenKind::End),
+            ("break", TokenKind::Break), ("continue", TokenKind::Continue),
+            ("and", TokenKind::And), ("or", TokenKind::Or), ("not", TokenKind::Not),
+            ("true", TokenKind::True), ("false", TokenKind::False), ("nothing", TokenKind::Nothing),
+        ];
+        for (source, expected) in keywords {
+            let tokens = tokenize(source).unwrap();
+            assert_eq!(tokens.len(), 1, "keyword '{}' should produce 1 token", source);
+            assert_eq!(tokens[0].kind, expected, "keyword '{}' mismatch", source);
+        }
+    }
+
+    #[test]
+    fn test_identifiers() {
+        let cases = [("x", "x"), ("myVar", "myVar"), ("_private", "_private"), ("a_b_c", "a_b_c"), ("x1", "x1")];
+        for (source, expected) in cases {
+            let tokens = tokenize(source).unwrap();
+            assert_eq!(tokens.len(), 1);
+            assert_eq!(tokens[0].kind, TokenKind::Ident(expected.to_string()));
+        }
+    }
+
+    // === Literals ===
+
+    #[test]
+    fn test_int_literals() {
+        let cases = [("0", 0), ("1", 1), ("42", 42), ("999999", 999999)];
+        for (source, expected) in cases {
+            let tokens = tokenize(source).unwrap();
+            assert_eq!(tokens.len(), 1);
+            assert_eq!(tokens[0].kind, TokenKind::Int(expected));
+        }
+    }
+
+    #[test]
+    fn test_float_literals() {
+        let cases = [("0.0", 0.0), ("3.14", 3.14), ("0.5", 0.5), ("100.0", 100.0)];
+        for (source, expected) in cases {
+            let tokens = tokenize(source).unwrap();
+            assert_eq!(tokens.len(), 1);
+            match &tokens[0].kind {
+                TokenKind::Float(val) => assert!((val - expected).abs() < 1e-10),
+                _ => panic!("Expected Float for '{}'", source),
+            }
+        }
+    }
+
+    #[test]
+    fn test_string_literals() {
+        let tokens = tokenize(r#""hello""#).unwrap();
+        assert_eq!(tokens.len(), 1);
+        assert_eq!(tokens[0].kind, TokenKind::Str("hello".to_string()));
+    }
+
+    #[test]
+    fn test_string_literal_empty() {
+        let tokens = tokenize(r#""""#).unwrap();
+        assert_eq!(tokens.len(), 1);
+        assert_eq!(tokens[0].kind, TokenKind::Str("".to_string()));
+    }
+
+    #[test]
+    fn test_string_escape_sequences() {
+        let tokens = tokenize(r#""line1\nline2\tindented\\backslash\"quote""#).unwrap();
+        assert_eq!(tokens.len(), 1);
+        match &tokens[0].kind {
+            TokenKind::Str(s) => {
+                assert_eq!(s, "line1\nline2\tindented\\backslash\"quote");
+            }
+            _ => panic!("Expected Str"),
+        }
+    }
+
+    #[test]
+    fn test_string_interpolation_detected() {
+        let tokens = tokenize(r#""hello {name} world""#).unwrap();
+        assert_eq!(tokens.len(), 1);
+        assert!(matches!(tokens[0].kind, TokenKind::StrInterp(_)));
+    }
+
+    #[test]
+    fn test_string_interpolation_multi_brace() {
+        let tokens = tokenize(r#""{a} + {b} = {c}""#).unwrap();
+        assert_eq!(tokens.len(), 1);
+        match &tokens[0].kind {
+            TokenKind::StrInterp(s) => assert_eq!(s, "{a} + {b} = {c}"),
+            _ => panic!("Expected StrInterp, got {:?}", tokens[0].kind),
+        }
+    }
+
+    #[test]
+    fn test_string_interpolation_empty_braces() {
+        let tokens = tokenize(r#""hello {} world""#).unwrap();
+        assert_eq!(tokens.len(), 1);
+        assert!(matches!(tokens[0].kind, TokenKind::StrInterp(_)));
+    }
+
+    // === Operators ===
+
+    #[test]
+    fn test_single_char_operators() {
+        let cases = [
+            ("+", TokenKind::Plus), ("-", TokenKind::Minus), ("*", TokenKind::Star),
+            ("/", TokenKind::Slash), ("%", TokenKind::Percent), ("<", TokenKind::Lt),
+            (">", TokenKind::Gt), ("=", TokenKind::Eq), (".", TokenKind::Dot),
+            (",", TokenKind::Comma), (":", TokenKind::Colon),
+            ("(", TokenKind::LParen), (")", TokenKind::RParen),
+            ("[", TokenKind::LBracket), ("]", TokenKind::RBracket),
+            ("{", TokenKind::LBrace), ("}", TokenKind::RBrace),
+            ("&", TokenKind::Amp),
+        ];
+        for (source, expected) in cases {
+            let tokens = tokenize(source).unwrap();
+            assert_eq!(tokens.len(), 1, "operator '{}' should produce 1 token", source);
+            assert_eq!(tokens[0].kind, expected, "operator '{}' mismatch", source);
+        }
+    }
+
+    #[test]
+    fn test_multi_char_operators() {
+        let cases = [
+            ("==", TokenKind::EqEq), ("!=", TokenKind::Neq), ("<=", TokenKind::Le),
+            (">=", TokenKind::Ge), ("|>", TokenKind::PipeGt), ("=>", TokenKind::FatArrow),
+            ("->", TokenKind::Arrow), ("..", TokenKind::DotDot),
+        ];
+        for (source, expected) in cases {
+            let tokens = tokenize(source).unwrap();
+            assert_eq!(tokens.len(), 1, "operator '{}' should produce 1 token", source);
+            assert_eq!(tokens[0].kind, expected, "operator '{}' mismatch", source);
+        }
+    }
+
+    // === Comments ===
+
+    #[test]
+    fn test_comment_line_start() {
+        let tokens = tokenize("-- this is a comment").unwrap();
+        assert_eq!(tokens.len(), 0);
+    }
+
+    #[test]
+    fn test_comment_after_code() {
+        let tokens = tokenize("let x = 1 -- inline comment").unwrap();
+        assert_eq!(tokens.len(), 4);
+        assert_eq!(tokens[3].kind, TokenKind::Int(1));
+    }
+
+    #[test]
+    fn test_multiple_comments() {
+        let tokens = tokenize("-- first\n-- second\nlet x = 1\n-- third").unwrap();
+        assert_eq!(tokens.len(), 6); // newline, let, x, =, 1, newline
+        // The key is the let x = 1 is lexed correctly
+        assert!(tokens.iter().any(|t| t.kind == TokenKind::Let));
+        assert!(tokens.iter().any(|t| t.kind == TokenKind::Int(1)));
+    }
+
+    // === Statement / Punctuation ===
+
     #[test]
     fn test_let_assignment() {
         let mut lexer = Lexer::new("let x = 10".to_string());
@@ -433,10 +622,129 @@ mod tests {
         assert_eq!(tokens[3], tk(TokenKind::Float(3.14), 1));
     }
 
+    // === Newlines ===
+
     #[test]
-    fn test_comment() {
-        let mut lexer = Lexer::new("-- this is a comment".to_string());
-        let tokens = lexer.tokenize().unwrap();
+    fn test_newline_simple() {
+        let tokens = tokenize("let x = 1\nprint x").unwrap();
+        let newline_count = tokens.iter().filter(|t| t.kind == TokenKind::Newline).count();
+        assert_eq!(newline_count, 1);
+    }
+
+    #[test]
+    fn test_newline_suppressed_in_parens() {
+        let tokens = tokenize("(1 +\n 2)").unwrap();
+        let newline_count = tokens.iter().filter(|t| t.kind == TokenKind::Newline).count();
+        assert_eq!(newline_count, 0);
+    }
+
+    #[test]
+    fn test_newline_suppressed_in_brackets() {
+        let tokens = tokenize("[1,\n 2]").unwrap();
+        let newline_count = tokens.iter().filter(|t| t.kind == TokenKind::Newline).count();
+        assert_eq!(newline_count, 0);
+    }
+
+    #[test]
+    fn test_newline_suppressed_in_braces() {
+        let tokens = tokenize("{a:\n 1}").unwrap();
+        let newline_count = tokens.iter().filter(|t| t.kind == TokenKind::Newline).count();
+        assert_eq!(newline_count, 0);
+    }
+
+    // === Line tracking ===
+
+    #[test]
+    fn test_line_numbers() {
+        let tokens = tokenize("let a = 1\nlet b = 2\nlet c = 3").unwrap();
+        let let_tokens: Vec<&Token> = tokens.iter().filter(|t| t.kind == TokenKind::Let).collect();
+        assert_eq!(let_tokens.len(), 3);
+        assert_eq!(let_tokens[0].line, 1);
+        assert_eq!(let_tokens[1].line, 2);
+        assert_eq!(let_tokens[2].line, 3);
+    }
+
+    // === Empty and whitespace ===
+
+    #[test]
+    fn test_empty_source() {
+        let tokens = tokenize("").unwrap();
         assert_eq!(tokens.len(), 0);
+    }
+
+    #[test]
+    fn test_whitespace_only() {
+        let tokens = tokenize("   \t  \n  ").unwrap();
+        // Whitespace-only produces no meaningful tokens
+        // The newline will produce a Newline token though
+        assert!(tokens.iter().all(|t| t.kind == TokenKind::Newline));
+    }
+
+    // === Multi-element programs ===
+
+    #[test]
+    fn test_full_expression() {
+        let tokens = tokenize("let result = 10 + 20 * 3").unwrap();
+        assert_eq!(tokens.len(), 8);
+        assert_eq!(tokens[0].kind, TokenKind::Let);
+        assert_eq!(tokens[1].kind, TokenKind::Ident("result".to_string()));
+        assert_eq!(tokens[2].kind, TokenKind::Eq);
+        assert_eq!(tokens[3].kind, TokenKind::Int(10));
+        assert_eq!(tokens[4].kind, TokenKind::Plus);
+        assert_eq!(tokens[5].kind, TokenKind::Int(20));
+        assert_eq!(tokens[6].kind, TokenKind::Star);
+        assert_eq!(tokens[7].kind, TokenKind::Int(3));
+    }
+
+    #[test]
+    fn test_list_literal_tokens() {
+        let tokens = tokenize("[1, 2, 3]").unwrap();
+        let kinds: Vec<&TokenKind> = tokens.iter().map(|t| &t.kind).collect();
+        assert_eq!(kinds, vec![
+            &TokenKind::LBracket,
+            &TokenKind::Int(1),
+            &TokenKind::Comma,
+            &TokenKind::Int(2),
+            &TokenKind::Comma,
+            &TokenKind::Int(3),
+            &TokenKind::RBracket,
+        ]);
+    }
+
+    // === Error cases ===
+
+    #[test]
+    fn test_error_unexpected_char_at() {
+        assert_lex_error("@");
+    }
+
+    #[test]
+    fn test_error_unexpected_char_dollar() {
+        assert_lex_error("$");
+    }
+
+    #[test]
+    fn test_error_unterminated_string() {
+        assert_lex_error(r#""unterminated"#);
+    }
+
+    #[test]
+    fn test_error_invalid_escape() {
+        assert_lex_error(r#""\z""#);
+    }
+
+    #[test]
+    fn test_error_bang_operator() {
+        assert_lex_error("!x");
+    }
+
+    #[test]
+    fn test_error_pipe_alone() {
+        assert_lex_error("a | b");
+    }
+
+    #[test]
+    fn test_error_question_mark() {
+        assert_lex_error("a ? b");
     }
 }

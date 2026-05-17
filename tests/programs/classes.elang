@@ -1,0 +1,20 @@
+class Dog:
+  pub name = ""
+  pub age = 0
+  def setup(name, age):
+    self.name = name
+    self.age = age
+  end
+  def speak():
+    print "Woof!"
+  end
+  def human_years():
+    return self.age * 7
+  end
+end
+
+let d = Dog()
+d.setup("Rex", 3)
+d.speak()
+print d.name
+print d.human_years()

@@ -516,15 +516,13 @@ impl Parser {
         let body = self.parse_block_stopping_at(&[TokenKind::End, TokenKind::Catch])?;
         let mut catches = Vec::new();
         while self.eat(TokenKind::Catch) {
-            let error_type = if !self.check_ident() && self.check_ident() {
-                None
-            } else if self.check_ident() && self.tokens.get(self.pos + 1).map_or(false, |t| t.kind != TokenKind::Colon) {
-                let type_name = self.expect_ident()?;
-                Some(type_name)
+            let var = self.expect_ident()?;
+            let error_type = if self.check_ident_str("is") {
+                self.advance()?;
+                Some(self.expect_ident()?)
             } else {
                 None
             };
-            let var = self.expect_ident()?;
             self.eat(TokenKind::Colon);
             let catch_body = self.parse_block_stopping_at(&[TokenKind::End, TokenKind::Catch])?;
             catches.push(CatchClause { error_type, var, body: catch_body });
@@ -594,7 +592,7 @@ impl Parser {
                     break;
                 }
                 self.advance()?;
-                let rhs = self.parse_expr_bp(bp)?;
+                let rhs = self.parse_expr_bp(bp + 1)?;
                 lhs = Expr::Pipe { left: Box::new(lhs), right: Box::new(rhs), line };
                 continue;
             }
@@ -996,5 +994,599 @@ mod tests {
             _ => panic!("Expected If"),
         }
         Ok(())
+    }
+
+    // === Declaration variants ===
+
+    #[test]
+    fn test_var_decl() -> Result<(), ElangError> {
+        let program = parse_source("var x = 10")?;
+        assert_eq!(program.len(), 1);
+        match &program[0] {
+            Statement::VarDecl { name, value, .. } => {
+                assert_eq!(name, "x");
+                assert!(matches!(value, Expr::Int { value: 10, .. }));
+            }
+            _ => panic!("Expected VarDecl"),
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_const_decl() -> Result<(), ElangError> {
+        let program = parse_source("const MAX = 100")?;
+        assert_eq!(program.len(), 1);
+        match &program[0] {
+            Statement::ConstDecl { name, value, .. } => {
+                assert_eq!(name, "MAX");
+                assert!(matches!(value, Expr::Int { value: 100, .. }));
+            }
+            _ => panic!("Expected ConstDecl"),
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_var_no_init() -> Result<(), ElangError> {
+        let program = parse_source("var x = nothing")?;
+        assert_eq!(program.len(), 1);
+        match &program[0] {
+            Statement::VarDecl { name, value, .. } => {
+                assert_eq!(name, "x");
+                assert!(matches!(value, Expr::Nothing { .. }));
+            }
+            _ => panic!("Expected VarDecl"),
+        }
+        Ok(())
+    }
+
+    // === Assignment ===
+
+    #[test]
+    fn test_assign_statement() -> Result<(), ElangError> {
+        let program = parse_source("x = 42")?;
+        assert_eq!(program.len(), 1);
+        match &program[0] {
+            Statement::Assign { name, value, .. } => {
+                assert_eq!(name, "x");
+                assert!(matches!(value, Expr::Int { value: 42, .. }));
+            }
+            _ => panic!("Expected Assign"),
+        }
+        Ok(())
+    }
+
+    // === While loop ===
+
+    #[test]
+    fn test_while_loop() -> Result<(), ElangError> {
+        let program = parse_source("while i < 10:\n  i = i + 1\nend")?;
+        assert_eq!(program.len(), 1);
+        match &program[0] {
+            Statement::Loop { kind, body, .. } => {
+                assert!(matches!(kind, LoopKind::While(_)));
+                assert_eq!(body.len(), 1);
+            }
+            _ => panic!("Expected Loop"),
+        }
+        Ok(())
+    }
+
+    // === Loop forever ===
+
+    #[test]
+    fn test_loop_forever() -> Result<(), ElangError> {
+        let program = parse_source("loop:\n  break\nend")?;
+        assert_eq!(program.len(), 1);
+        match &program[0] {
+            Statement::Loop { kind, body, .. } => {
+                assert!(matches!(kind, LoopKind::Forever));
+                assert_eq!(body.len(), 1);
+                assert!(matches!(&body[0], Statement::Break { .. }));
+            }
+            _ => panic!("Expected Loop"),
+        }
+        Ok(())
+    }
+
+    // === For in ===
+
+    #[test]
+    fn test_for_in_loop() -> Result<(), ElangError> {
+        let program = parse_source("for item in items:\n  print item\nend")?;
+        assert_eq!(program.len(), 1);
+        match &program[0] {
+            Statement::ForIn { var, iterable, body, .. } => {
+                assert_eq!(var, "item");
+                assert!(matches!(iterable, Expr::Ident { name, .. } if name == "items"));
+                assert_eq!(body.len(), 1);
+            }
+            _ => panic!("Expected ForIn"),
+        }
+        Ok(())
+    }
+
+    // === Repeat N times ===
+
+    #[test]
+    fn test_repeat_n_times() -> Result<(), ElangError> {
+        let program = parse_source("repeat 5 times:\n  print \"hi\"\nend")?;
+        assert_eq!(program.len(), 1);
+        match &program[0] {
+            Statement::Loop { kind, body, .. } => {
+                match kind {
+                    LoopKind::RepeatN(expr) => assert!(matches!(expr, Expr::Int { value: 5, .. })),
+                    _ => panic!("Expected RepeatN"),
+                }
+                assert_eq!(body.len(), 1);
+            }
+            _ => panic!("Expected Loop"),
+        }
+        Ok(())
+    }
+
+    // === Repeat with range ===
+
+    #[test]
+    fn test_repeat_range() -> Result<(), ElangError> {
+        let program = parse_source("repeat i from 1 to 5:\n  print i\nend")?;
+        assert_eq!(program.len(), 1);
+        match &program[0] {
+            Statement::Loop { kind, body, .. } => {
+                match kind {
+                    LoopKind::RepeatRange { var, from, to } => {
+                        assert_eq!(var, "i");
+                        assert!(matches!(from, Expr::Int { value: 1, .. }));
+                        assert!(matches!(to, Expr::Int { value: 5, .. }));
+                    }
+                    _ => panic!("Expected RepeatRange"),
+                }
+                assert_eq!(body.len(), 1);
+            }
+            _ => panic!("Expected Loop"),
+        }
+        Ok(())
+    }
+
+    // === Class ===
+
+    #[test]
+    fn test_empty_class() -> Result<(), ElangError> {
+        let program = parse_source("class Foo:\nend")?;
+        assert_eq!(program.len(), 1);
+        match &program[0] {
+            Statement::ClassDef { name, parent, .. } => {
+                assert_eq!(name, "Foo");
+                assert!(parent.is_none());
+            }
+            _ => panic!("Expected ClassDef"),
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_class_with_extends() -> Result<(), ElangError> {
+        let program = parse_source("class Dog extends Animal:\nend")?;
+        assert_eq!(program.len(), 1);
+        match &program[0] {
+            Statement::ClassDef { name, parent, .. } => {
+                assert_eq!(name, "Dog");
+                assert_eq!(parent.as_deref(), Some("Animal"));
+            }
+            _ => panic!("Expected ClassDef"),
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_class_with_fields_and_methods() -> Result<(), ElangError> {
+        let program = parse_source("class Counter:\n  pub count = 0\n  pub def inc():\n    self.count = self.count + 1\n  end\nend")?;
+        assert_eq!(program.len(), 1);
+        match &program[0] {
+            Statement::ClassDef { name, body, .. } => {
+                assert_eq!(name, "Counter");
+                assert_eq!(body.len(), 2);
+                assert!(matches!(&body[0], Statement::Field { name: f, .. } if f == "count"));
+                assert!(matches!(&body[1], Statement::FnDef { name: fn_name, .. } if fn_name == "inc"));
+            }
+            _ => panic!("Expected ClassDef"),
+        }
+        Ok(())
+    }
+
+    // === Return, Break, Continue ===
+
+    #[test]
+    fn test_return_value() -> Result<(), ElangError> {
+        let program = parse_source("def foo():\n  return 42\nend")?;
+        assert_eq!(program.len(), 1);
+        match &program[0] {
+            Statement::FnDef { body, .. } => {
+                assert_eq!(body.len(), 1);
+                match &body[0] {
+                    Statement::Return { value, .. } => {
+                        assert!(matches!(value, Expr::Int { value: 42, .. }));
+                    }
+                    _ => panic!("Expected Return"),
+                }
+            }
+            _ => panic!("Expected FnDef"),
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_break_statement() -> Result<(), ElangError> {
+        let program = parse_source("loop:\n  break\nend")?;
+        assert!(matches!(&program[0], Statement::Loop { .. }));
+        Ok(())
+    }
+
+    #[test]
+    fn test_continue_statement() -> Result<(), ElangError> {
+        let program = parse_source("loop:\n  continue\nend")?;
+        assert!(matches!(&program[0], Statement::Loop { .. }));
+        Ok(())
+    }
+
+    // === Try/Catch ===
+
+    #[test]
+    fn test_try_catch() -> Result<(), ElangError> {
+        let program = parse_source("try:\n  risky()\ncatch err:\n  print err\nend")?;
+        assert_eq!(program.len(), 1);
+        match &program[0] {
+            Statement::Try { body, catches, .. } => {
+                assert_eq!(body.len(), 1);
+                assert_eq!(catches.len(), 1);
+                assert_eq!(catches[0].var, "err");
+                assert!(catches[0].error_type.is_none());
+            }
+            _ => panic!("Expected Try"),
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_try_catch_with_error_type() -> Result<(), ElangError> {
+        let program = parse_source("try:\n  risky()\ncatch err is RuntimeError:\n  print err\nend")?;
+        assert_eq!(program.len(), 1);
+        match &program[0] {
+            Statement::Try { body, catches, .. } => {
+                assert_eq!(catches.len(), 1);
+                assert_eq!(catches[0].var, "err");
+                assert_eq!(catches[0].error_type.as_deref(), Some("RuntimeError"));
+            }
+            _ => panic!("Expected Try"),
+        }
+        Ok(())
+    }
+
+    // === Import / Export ===
+
+    #[test]
+    fn test_import() -> Result<(), ElangError> {
+        let program = parse_source("import math")?;
+        assert_eq!(program.len(), 1);
+        match &program[0] {
+            Statement::Import { module, .. } => assert_eq!(module, "math"),
+            _ => panic!("Expected Import"),
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_export_function() -> Result<(), ElangError> {
+        let program = parse_source("export def foo():\n  print 1\nend")?;
+        assert_eq!(program.len(), 1);
+        match &program[0] {
+            Statement::Export { stmt, .. } => {
+                assert!(matches!(stmt.as_ref(), Statement::FnDef { name, .. } if name == "foo"));
+            }
+            _ => panic!("Expected Export"),
+        }
+        Ok(())
+    }
+
+    // === Expression types ===
+
+    #[test]
+    fn test_float_literal_expr() -> Result<(), ElangError> {
+        let program = parse_source("let x = 3.14")?;
+        match &program[0] {
+            Statement::LetDecl { value, .. } => assert!(matches!(value, Expr::Float { .. })),
+            _ => panic!("Expected LetDecl"),
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_bool_literal_expr() -> Result<(), ElangError> {
+        let program = parse_source("let a = true\nlet b = false")?;
+        assert_eq!(program.len(), 2);
+        match (&program[0], &program[1]) {
+            (Statement::LetDecl { value: a_val, .. }, Statement::LetDecl { value: b_val, .. }) => {
+                assert!(matches!(a_val, Expr::Bool { value: true, .. }));
+                assert!(matches!(b_val, Expr::Bool { value: false, .. }));
+            }
+            _ => panic!("Expected LetDecls"),
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_str_literal_expr() -> Result<(), ElangError> {
+        let program = parse_source(r#"let s = "hello""#)?;
+        match &program[0] {
+            Statement::LetDecl { value, .. } => {
+                assert!(matches!(value, Expr::Str { value: s, .. } if s == "hello"));
+            }
+            _ => panic!("Expected LetDecl"),
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_nothing_literal_expr() -> Result<(), ElangError> {
+        let program = parse_source("let n = nothing")?;
+        match &program[0] {
+            Statement::LetDecl { value, .. } => assert!(matches!(value, Expr::Nothing { .. })),
+            _ => panic!("Expected LetDecl"),
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_list_literal() -> Result<(), ElangError> {
+        let program = parse_source("let items = [1, 2, 3]")?;
+        match &program[0] {
+            Statement::LetDecl { value, .. } => {
+                match value {
+                    Expr::List { items, .. } => {
+                        assert_eq!(items.len(), 3);
+                    }
+                    _ => panic!("Expected List"),
+                }
+            }
+            _ => panic!("Expected LetDecl"),
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_empty_list() -> Result<(), ElangError> {
+        let program = parse_source("let e = []")?;
+        match &program[0] {
+            Statement::LetDecl { value, .. } => {
+                assert!(matches!(value, Expr::List { items, .. } if items.is_empty()));
+            }
+            _ => panic!("Expected empty List"),
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_map_literal() -> Result<(), ElangError> {
+        let program = parse_source("{a: 1, b: 2}")?;
+        assert_eq!(program.len(), 1);
+        match &program[0] {
+            Statement::ExprStmt { expr, .. } => {
+                match expr {
+                    Expr::Map { pairs, .. } => {
+                        assert_eq!(pairs.len(), 2);
+                    }
+                    _ => panic!("Expected Map"),
+                }
+            }
+            _ => panic!("Expected ExprStmt"),
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_index_expression() -> Result<(), ElangError> {
+        let program = parse_source("let x = items[0]")?;
+        match &program[0] {
+            Statement::LetDecl { value, .. } => {
+                assert!(matches!(value, Expr::Index { .. }));
+            }
+            _ => panic!("Expected LetDecl"),
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_field_access() -> Result<(), ElangError> {
+        let program = parse_source("let x = obj.field")?;
+        match &program[0] {
+            Statement::LetDecl { value, .. } => {
+                assert!(matches!(value, Expr::Field { .. }));
+            }
+            _ => panic!("Expected LetDecl"),
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_lambda_simple() -> Result<(), ElangError> {
+        let program = parse_source("let double = fn(x) => x * 2")?;
+        match &program[0] {
+            Statement::LetDecl { value, .. } => {
+                assert!(matches!(value, Expr::Lambda { params, .. } if params.len() == 1));
+            }
+            _ => panic!("Expected LetDecl"),
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_pipe_expression() -> Result<(), ElangError> {
+        let program = parse_source("let r = 5 |> double")?;
+        match &program[0] {
+            Statement::LetDecl { value, .. } => {
+                assert!(matches!(value, Expr::Pipe { .. }));
+            }
+            _ => panic!("Expected LetDecl"),
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_function_call() -> Result<(), ElangError> {
+        let program = parse_source("let r = add(1, 2, 3)")?;
+        match &program[0] {
+            Statement::LetDecl { value, .. } => {
+                match value {
+                    Expr::Call { callee, args, .. } => {
+                        assert!(matches!(callee.as_ref(), Expr::Ident { name, .. } if name == "add"));
+                        assert_eq!(args.len(), 3);
+                    }
+                    _ => panic!("Expected Call"),
+                }
+            }
+            _ => panic!("Expected LetDecl"),
+        }
+        Ok(())
+    }
+
+    // === Operator precedence ===
+
+    #[test]
+    fn test_mul_over_add_precedence() -> Result<(), ElangError> {
+        let program = parse_source("let x = 1 + 2 * 3")?;
+        match &program[0] {
+            Statement::LetDecl { value, .. } => {
+                match value {
+                    Expr::BinOp { left, op, right, .. } => {
+                        assert!(matches!(op, BinOpKind::Add));
+                        assert!(matches!(**left, Expr::Int { value: 1, .. }));
+                        assert!(matches!(**right, Expr::BinOp { op: inner_op, .. } if matches!(inner_op, BinOpKind::Mul)));
+                    }
+                    _ => panic!("Expected BinOp"),
+                }
+            }
+            _ => panic!("Expected LetDecl"),
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_parens_override_precedence() -> Result<(), ElangError> {
+        let program = parse_source("let x = (1 + 2) * 3")?;
+        match &program[0] {
+            Statement::LetDecl { value, .. } => {
+                match value {
+                    Expr::BinOp { left, op, right, .. } => {
+                        assert!(matches!(op, BinOpKind::Mul));
+                        assert!(matches!(**left, Expr::BinOp { op: inner_op, .. } if matches!(inner_op, BinOpKind::Add)));
+                        assert!(matches!(**right, Expr::Int { value: 3, .. }));
+                    }
+                    _ => panic!("Expected BinOp"),
+                }
+            }
+            _ => panic!("Expected LetDecl"),
+        }
+        Ok(())
+    }
+
+    // === Unary negation ===
+
+    #[test]
+    fn test_unary_negation() -> Result<(), ElangError> {
+        let program = parse_source("let x = -5")?;
+        match &program[0] {
+            Statement::LetDecl { value, .. } => {
+                assert!(matches!(value, Expr::UnaryOp { op: UnaryOpKind::Neg, .. }));
+            }
+            _ => panic!("Expected LetDecl"),
+        }
+        Ok(())
+    }
+
+    // === Comparison operators ===
+
+    #[test]
+    fn test_comparison_operators() -> Result<(), ElangError> {
+        let ops = [("==", BinOpKind::Eq), ("!=", BinOpKind::NotEq), ("<", BinOpKind::Lt),
+                    (">", BinOpKind::Gt), ("<=", BinOpKind::LtEq), (">=", BinOpKind::GtEq)];
+        for (op_str, expected_op) in ops {
+            let source = format!("let x = 1 {} 2", op_str);
+            let program = parse_source(&source)?;
+            match &program[0] {
+                Statement::LetDecl { value, .. } => {
+                    assert!(matches!(value, Expr::BinOp { op, .. } if op == &expected_op),
+                        "expected BinOp with {:?} for '{}'", expected_op, op_str);
+                }
+                _ => panic!("Expected LetDecl"),
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_logical_and_or() -> Result<(), ElangError> {
+        let program = parse_source("let x = true and false or true")?;
+        match &program[0] {
+            Statement::LetDecl { value, .. } => {
+                match value {
+                    Expr::BinOp { op, .. } => {
+                        assert!(matches!(op, BinOpKind::Or));
+                    }
+                    _ => panic!("Expected BinOp"),
+                }
+            }
+            _ => panic!("Expected LetDecl"),
+        }
+        Ok(())
+    }
+
+    // === Empty program ===
+
+    #[test]
+    fn test_empty_program() -> Result<(), ElangError> {
+        let program = parse_source("")?;
+        assert_eq!(program.len(), 0);
+        Ok(())
+    }
+
+    // === Statement as expression ===
+
+    #[test]
+    fn test_bare_expression() -> Result<(), ElangError> {
+        let program = parse_source("42")?;
+        assert_eq!(program.len(), 1);
+        match &program[0] {
+            Statement::ExprStmt { expr, .. } => {
+                assert!(matches!(expr, Expr::Int { value: 42, .. }));
+            }
+            _ => panic!("Expected ExprStmt"),
+        }
+        Ok(())
+    }
+
+    // === Error cases ===
+
+    #[test]
+    fn test_error_missing_try_end() {
+        let result = parse_source("try:\n  risky()");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_error_missing_while_end() {
+        let result = parse_source("while true:\n  print 1");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_error_missing_loop_end() {
+        let result = parse_source("loop:\n  break");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_error_parse_invalid_expression() {
+        let result = parse_source("let x = +");
+        assert!(result.is_err());
     }
 }

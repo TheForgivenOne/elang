@@ -70,40 +70,41 @@ impl std::fmt::Display for Value {
 
 #[derive(Debug, Clone)]
 pub struct Environment {
-    values: HashMap<String, Value>,
+    values: Rc<RefCell<HashMap<String, Value>>>,
     parent: Option<Box<Environment>>,
 }
 
 impl Environment {
     pub fn new() -> Self {
         Environment {
-            values: HashMap::new(),
+            values: Rc::new(RefCell::new(HashMap::new())),
             parent: None,
         }
     }
 
     pub fn child(parent: &Environment) -> Self {
         Environment {
-            values: HashMap::new(),
+            values: Rc::new(RefCell::new(HashMap::new())),
             parent: Some(Box::new(parent.clone())),
         }
     }
 
     pub fn declare(&mut self, name: String, value: Value) -> Result<(), ElangError> {
-        if self.values.contains_key(&name) {
+        if self.values.borrow().contains_key(&name) {
             return Err(ElangError::RuntimeError {
                 message: format!("'{}' is already declared in this scope", name),
                 line: 0,
                 stack: vec![],
             });
         }
-        self.values.insert(name, value);
+        self.values.borrow_mut().insert(name, value);
         Ok(())
     }
 
     fn assign(&mut self, name: &str, value: Value) -> Result<(), ElangError> {
-        if self.values.contains_key(name) {
-            self.values.insert(name.to_string(), value);
+        let exists = self.values.borrow().contains_key(name);
+        if exists {
+            self.values.borrow_mut().insert(name.to_string(), value);
             Ok(())
         } else if let Some(parent) = &mut self.parent {
             parent.assign(name, value)
@@ -117,7 +118,7 @@ impl Environment {
     }
 
     fn get(&self, name: &str) -> Result<Value, ElangError> {
-        if let Some(val) = self.values.get(name) {
+        if let Some(val) = self.values.borrow().get(name) {
             Ok(val.clone())
         } else if let Some(parent) = &self.parent {
             parent.get(name)
@@ -286,9 +287,11 @@ fn execute_statement(stmt: &Statement, env: &mut Environment) -> Result<Control,
         } => {
             let cond_val = eval_expr(condition, env)?;
             if is_truthy(&cond_val) {
-                execute_block(then_block, env)
+                let mut child = Environment::child(env);
+                execute_block(then_block, &mut child)
             } else if let Some(else_blk) = else_block {
-                execute_block(else_blk, env)
+                let mut child = Environment::child(env);
+                execute_block(else_blk, &mut child)
             } else {
                 Ok(Control::Normal)
             }
@@ -776,8 +779,31 @@ fn eval_binop(
         },
         BinOpKind::Sub => number_binop(&left, &right, |a, b| Value::Int(a - b), |a, b| Value::Float(a - b), line),
         BinOpKind::Mul => number_binop(&left, &right, |a, b| Value::Int(a * b), |a, b| Value::Float(a * b), line),
-        BinOpKind::Div => number_binop(&left, &right, |a, b| Value::Int(a / b), |a, b| Value::Float(a / b), line),
-        BinOpKind::Mod => number_binop(&left, &right, |a, b| Value::Int(a % b), |_, _| unreachable!(), line),
+        BinOpKind::Div => {
+            let is_zero = match &right {
+                Value::Int(0) => true,
+                Value::Float(b) => *b == 0.0,
+                _ => false,
+            };
+            if is_zero {
+                return Err(ElangError::RuntimeError {
+                    message: "division by zero".to_string(),
+                    line,
+                    stack: vec![],
+                });
+            }
+            number_binop(&left, &right, |a, b| Value::Int(a / b), |a, b| Value::Float(a / b), line)
+        }
+        BinOpKind::Mod => {
+            if matches!(&right, Value::Int(0)) {
+                return Err(ElangError::RuntimeError {
+                    message: "division by zero".to_string(),
+                    line,
+                    stack: vec![],
+                });
+            }
+            number_binop(&left, &right, |a, b| Value::Int(a % b), |_, _| unreachable!(), line)
+        }
         BinOpKind::Eq => Ok(Value::Bool(values_equal(&left, &right))),
         BinOpKind::NotEq => Ok(Value::Bool(!values_equal(&left, &right))),
         BinOpKind::Lt => compare_binop(&left, &right, |a, b| a < b, |a, b| a < b, line),
@@ -1166,5 +1192,341 @@ print fibonacci(15)
             run_source(source).unwrap();
         }));
         assert!(result.is_ok());
+    }
+
+    // === Variable declarations ===
+
+    #[test]
+    fn test_let_decl() {
+        run_source("let x = 42\nprint x").unwrap();
+    }
+
+    #[test]
+    fn test_const_decl() {
+        run_source("const X = 100\nprint X").unwrap();
+    }
+
+    #[test]
+    fn test_var_decl() {
+        run_source("var y = 50\nprint y").unwrap();
+    }
+
+    #[test]
+    fn test_var_reassign() {
+        run_source("var y = 1\ny = 2\nprint y").unwrap();
+    }
+
+    #[test]
+    fn test_assign_undefined_variable() {
+        let result = run_source("x = 42");
+        assert!(result.is_err());
+    }
+
+    // === Arithmetic ===
+
+    #[test]
+    fn test_arithmetic_add() {
+        run_source("print 10 + 5").unwrap();
+    }
+
+    #[test]
+    fn test_arithmetic_sub() {
+        run_source("print 20 - 7").unwrap();
+    }
+
+    #[test]
+    fn test_arithmetic_mul() {
+        run_source("print 6 * 7").unwrap();
+    }
+
+    #[test]
+    fn test_arithmetic_div() {
+        run_source("print 100 / 4").unwrap();
+    }
+
+    #[test]
+    fn test_arithmetic_mod() {
+        run_source("print 17 % 5").unwrap();
+    }
+
+    #[test]
+    fn test_arithmetic_mixed_int_float() {
+        run_source("print 10 + 2.5").unwrap();
+    }
+
+    #[test]
+    fn test_arithmetic_negative() {
+        run_source("let x = -10\nprint x").unwrap();
+    }
+
+    #[test]
+    fn test_arithmetic_precedence() {
+        run_source("print 1 + 2 * 3").unwrap();
+    }
+
+    // === Comparison ===
+
+    #[test]
+    fn test_comparison_eq() { run_source("print 5 == 5").unwrap(); }
+    #[test]
+    fn test_comparison_neq() { run_source("print 5 != 3").unwrap(); }
+    #[test]
+    fn test_comparison_lt() { run_source("print 3 < 5").unwrap(); }
+    #[test]
+    fn test_comparison_gt() { run_source("print 5 > 3").unwrap(); }
+    #[test]
+    fn test_comparison_lte() { run_source("print 5 <= 5").unwrap(); }
+    #[test]
+    fn test_comparison_gte() { run_source("print 5 >= 5").unwrap(); }
+
+    // === Logical operators ===
+
+    #[test]
+    fn test_and_true() { run_source("print true and true").unwrap(); }
+    #[test]
+    fn test_and_false() { run_source("print true and false").unwrap(); }
+    #[test]
+    fn test_or_true() { run_source("print false or true").unwrap(); }
+    #[test]
+    fn test_or_false() { run_source("print false or false").unwrap(); }
+    #[test]
+    fn test_not_true() { run_source("print not true").unwrap(); }
+    #[test]
+    fn test_not_false() { run_source("print not false").unwrap(); }
+    #[test]
+    fn test_truthy_int() { run_source("if 1:\n  print \"yes\"\nend").unwrap(); }
+    #[test]
+    fn test_falsy_int() {
+        let result = run_source("if 0:\n  print \"no\"\nend");
+        assert!(result.is_ok());
+    }
+    #[test]
+    fn test_truthy_string() { run_source("if \"hi\":\n  print \"yes\"\nend").unwrap(); }
+    #[test]
+    fn test_falsy_string() {
+        let result = run_source("if \"\":\n  print \"no\"\nend");
+        assert!(result.is_ok());
+    }
+    #[test]
+    fn test_falsy_nothing() {
+        let result = run_source("if nothing:\n  print \"no\"\nend");
+        assert!(result.is_ok());
+    }
+
+    // === Strings ===
+
+    #[test]
+    fn test_string_concat() {
+        run_source("print \"hello\" + \" world\"").unwrap();
+    }
+    #[test]
+    fn test_string_interp_simple() {
+        run_source("let x = 42\nprint \"value: {x}\"").unwrap();
+    }
+
+    // === Lists ===
+
+    #[test]
+    fn test_list_index() {
+        run_source("let items = [10, 20, 30]\nprint items[1]").unwrap();
+    }
+    #[test]
+    fn test_list_index_out_of_bounds() {
+        let result = run_source("let items = [1]\nprint items[5]");
+        assert!(result.is_err());
+    }
+    #[test]
+    fn test_list_index_negative() {
+        let result = run_source("let items = [1]\nprint items[-1]");
+        assert!(result.is_err());
+    }
+
+    // === Control flow ===
+
+    #[test]
+    fn test_if_true_branch() {
+        run_source("if true:\n  print \"yes\"\nend").unwrap();
+    }
+    #[test]
+    fn test_if_false_else() {
+        run_source("if false:\n  print \"no\"\nelse:\n  print \"yes\"\nend").unwrap();
+    }
+    #[test]
+    fn test_else_if() {
+        run_source("if false:\n  print \"a\"\nelse if true:\n  print \"b\"\nelse:\n  print \"c\"\nend").unwrap();
+    }
+    #[test]
+    fn test_while_loop() {
+        run_source("let i = 0\nwhile i < 3:\n  print i\n  i = i + 1\nend").unwrap();
+    }
+    #[test]
+    fn test_loop_break() {
+        run_source("let i = 0\nloop:\n  i = i + 1\n  if i > 2:\n    break\n  end\nend\nprint i").unwrap();
+    }
+    #[test]
+    fn test_repeat_n() {
+        run_source("repeat 3 times:\n  print \"x\"\nend").unwrap();
+    }
+    #[test]
+    fn test_repeat_range() {
+        run_source("repeat i from 1 to 3:\n  print i\nend").unwrap();
+    }
+    #[test]
+    fn test_for_in() {
+        run_source("for x in [10, 20, 30]:\n  print x\nend").unwrap();
+    }
+
+    // === Break/continue ===
+
+    #[test]
+    fn test_break_outside_loop() {
+        let result = run_source("break");
+        assert!(result.is_err());
+    }
+    #[test]
+    fn test_continue_outside_loop() {
+        let result = run_source("continue");
+        assert!(result.is_err());
+    }
+    #[test]
+    fn test_return_outside_function() {
+        let result = run_source("return 1");
+        assert!(result.is_err());
+    }
+
+    // === Functions ===
+
+    #[test]
+    fn test_function_no_params() {
+        run_source("def f():\n  print 42\nend\nf()").unwrap();
+    }
+    #[test]
+    fn test_function_with_params() {
+        run_source("def add(a, b):\n  return a + b\nend\nprint add(3, 4)").unwrap();
+    }
+    #[test]
+    fn test_function_return_nothing() {
+        run_source("def f():\n  let x = 1\nend\nprint f()").unwrap();
+    }
+    #[test]
+    fn test_mutual_recursion() {
+        run_source("def even(n):\n  if n == 0:\n    return true\n  end\n  return odd(n - 1)\nend\ndef odd(n):\n  if n == 0:\n    return false\n  end\n  return even(n - 1)\nend\nprint even(4)").unwrap();
+    }
+    #[test]
+    fn test_wrong_arg_count() {
+        let result = run_source("def f(a, b): end\nf(1)");
+        assert!(result.is_err());
+    }
+
+    // === Classes ===
+
+    #[test]
+    fn test_class_instantiate() {
+        run_source("class Empty:\nend\nlet e = Empty()").unwrap();
+    }
+    #[test]
+    fn test_method_call_no_args() {
+        run_source("class Foo:\n  pub def bar():\n    print 42\n  end\nend\nlet f = Foo()\nf.bar()").unwrap();
+    }
+    #[test]
+    fn test_method_with_self() {
+        run_source("class C:\n  pub count = 0\n  pub def inc():\n    self.count = self.count + 1\n  end\nend\nlet c = C()\nc.inc()\nprint c.count").unwrap();
+    }
+
+    // === Match ===
+
+    #[test]
+    fn test_match_literal_int() {
+        run_source("match 2:\n  1: print \"one\"\n  2: print \"two\"\n  _: print \"other\"\nend").unwrap();
+    }
+    #[test]
+    fn test_match_wildcard() {
+        run_source("match 99:\n  1: print \"one\"\n  _: print \"other\"\nend").unwrap();
+    }
+    #[test]
+    fn test_match_is_type() {
+        run_source("match \"hello\":\n  is int: print \"int\"\n  is string: print \"string\"\n  _: print \"other\"\nend").unwrap();
+    }
+
+    // === Try/Catch ===
+
+    #[test]
+    fn test_try_no_error() {
+        run_source("try:\n  print 1\ncatch err:\n  print 2\nend").unwrap();
+    }
+    #[test]
+    fn test_try_catch_error() {
+        run_source("try:\n  let x = 1 / 0\ncatch err:\n  print \"caught\"\nend").unwrap();
+    }
+
+    // === Lambdas ===
+
+    #[test]
+    fn test_lambda_called_directly() {
+        run_source("print (fn(x) => x * 2)(5)").unwrap();
+    }
+    #[test]
+    fn test_lambda_multi_args() {
+        run_source("let add = fn(a, b) => a + b\nprint add(10, 20)").unwrap();
+    }
+    #[test]
+    fn test_lambda_higher_order() {
+        run_source("let apply = fn(f, x) => f(x)\nlet d = fn(x) => x * 2\nprint apply(d, 5)").unwrap();
+    }
+
+    // === Pipe ===
+
+    #[test]
+    fn test_pipe_simple() {
+        run_source("def d(x):\n  return x * 2\nend\nprint 5 |> d").unwrap();
+    }
+    #[test]
+    fn test_pipe_chained() {
+        run_source("def d(x):\n  return x * 2\nend\ndef a(x):\n  return x + 1\nend\nprint 5 |> d |> a").unwrap();
+    }
+
+    // === Scope ===
+
+    #[test]
+    fn test_nested_block_scope() {
+        run_source("let x = 1\nif true:\n  let y = 2\n  print x + y\nend").unwrap();
+    }
+    #[test]
+    fn test_shadowing() {
+        run_source("let x = 1\nif true:\n  let x = 2\n  print x\nend\nprint x").unwrap();
+    }
+
+    // === Print all literal types ===
+
+    #[test]
+    fn test_print_int() { run_source("print 42").unwrap(); }
+    #[test]
+    fn test_print_float() { run_source("print 3.14").unwrap(); }
+    #[test]
+    fn test_print_bool() { run_source("print true\nprint false").unwrap(); }
+    #[test]
+    fn test_print_string() { run_source("print \"hello\"").unwrap(); }
+    #[test]
+    fn test_print_nothing() { run_source("print nothing").unwrap(); }
+    #[test]
+    fn test_print_list() { run_source("print [1, 2, 3]").unwrap(); }
+    #[test]
+    fn test_print_empty_list() { run_source("print []").unwrap(); }
+    #[test]
+    fn test_print_map() { run_source("print {a: 1, b: 2}").unwrap(); }
+
+    // === Division by zero ===
+
+    #[test]
+    fn test_division_by_zero() {
+        let result = run_source("print 1 / 0");
+        assert!(result.is_err());
+    }
+
+    // === Import works ===
+
+    #[test]
+    fn test_import_math() {
+        run_source("import math\nprint math.sqrt(9)").unwrap();
     }
 }
